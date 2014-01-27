@@ -201,14 +201,10 @@ void* avatar_thread_update(void* key_input)
 				pos_ctl.erase(pos_ctl.begin()); // Remove starting deriv
 				pos_ctl.erase(pos_ctl.begin()); // Remove old ending deriv
 				anim_t = 0.0f;
-				printf("----------------\n");
 			}else{
-				// We're actually done. Update everything to the end position
-				/*pos_ctl[0] = pos_ctl[3];
-				pos_ctl[1] = pos_ctl[3];*/
+				// We're actually done. Update old ending deriv to the end position
 				pos_ctl[2] = pos_ctl[3];
 			}
-			//anim_t = 0.0f;
 		}
 
 		while (!update_avatar){
@@ -218,20 +214,22 @@ void* avatar_thread_update(void* key_input)
 		////update the motion of the corresponding avatar
 		vector<float> next_dir(3,0);
 		if(avatar_key == 'w'){//move forward
-			//translate[0][0]+=0.1f;
 			next_dir[0] += anim_dist;
 		}
 		if(avatar_key == 's'){//move backward
-			//translate[0][0]-=0.1f;
 			next_dir[0] -= anim_dist;
 		}
 		if(avatar_key == 'a'){//move left
-			//translate[0][2]-=0.1f;
 			next_dir[2] -= anim_dist;
 		}
 		if(avatar_key == 'd'){//move right
-			//translate[0][2]+=0.1f;
 			next_dir[2] += anim_dist;
+		}
+		if(avatar_key == 'z'){//move up
+			next_dir[1] += anim_dist;
+		}
+		if(avatar_key == 'x'){//move down
+			next_dir[1] -= anim_dist;
 		}
 		if(avatar_key == 'n')//turn left
 			angle[0]+=pi/2.0f;
@@ -240,44 +238,38 @@ void* avatar_thread_update(void* key_input)
 
 		// New command or command interrupting animation
 		if(avatar_key != '\0'){
-			//if(anim_done == false){
-				vector<float> scnd_end = pos_ctl[pos_ctl.size() - 2];
-				vector<float> end = pos_ctl.back();
+			vector<float> scnd_end = pos_ctl[pos_ctl.size() - 2];
+			vector<float> end = pos_ctl.back();
 
-				// Calculate default C1 & C2
-				vector<float> new_end = vec_add(3, false, end, next_dir);
+			// Calculate default C1 & C2
+			vector<float> new_end = vec_add(3, false, end, next_dir);
 
-				float dx = abs(end[0] - new_end[0]);
-				float dy = abs(end[1] - new_end[1]);
-				float dz = abs(end[2] - new_end[2]);
+			float dx = abs(end[0] - new_end[0]);
+			float dy = abs(end[1] - new_end[1]);
+			float dz = abs(end[2] - new_end[2]);
 
-				vector<float> ctl1(end), ctl2(new_end);
-				if(dx > dy && dx > dz){
-					// dX is greatest
-					ctl1[0] = (end[0] + new_end[0]) / 2.0f;
-					ctl2[0] = ctl1[0];
-				} else if( dy > dz){
-					// dY is greatest
-					ctl1[1] = (end[1] + new_end[1]) / 2.0f;
-					ctl2[1] = ctl1[1];
-				} else{
-					// dZ is greatest
-					ctl1[2] = (end[2] + new_end[2]) / 2.0f;
-					ctl2[2] = ctl1[2];
-				}
+			vector<float> ctl1(end), ctl2(new_end);
+			if(dx > dy && dx > dz){
+				// dX is greatest
+				ctl1[0] = (end[0] + new_end[0]) / 2.0f;
+				ctl2[0] = ctl1[0];
+			} else if( dy > dz){
+				// dY is greatest
+				ctl1[1] = (end[1] + new_end[1]) / 2.0f;
+				ctl2[1] = ctl1[1];
+			} else{
+				// dZ is greatest
+				ctl1[2] = (end[2] + new_end[2]) / 2.0f;
+				ctl2[2] = ctl1[2];
+			}
 
-				// Calculate derivatives for C1 continuity
-				vector<float> end_deriv = vec_normalize(3, vec_add(3, true, end, scnd_end));
-				ctl1 = vec_add(3, false, end, vec_scalar_product(3, vec_dot_product(3, vec_add(3, true, ctl1, end), end_deriv), end_deriv));
+			// Calculate derivatives for C1 continuity
+			vector<float> end_deriv = vec_normalize(3, vec_add(3, true, end, scnd_end));
+			ctl1 = vec_add(3, false, end, vec_scalar_product(3, vec_dot_product(3, vec_add(3, true, ctl1, end), end_deriv), end_deriv));
 
-				pos_ctl.push_back(ctl1);
-				pos_ctl.push_back(ctl2);
-				pos_ctl.push_back(new_end);
-			//}else{
-			/*if(anim_done){
-				anim_t = 0.0f;
-				printf("================\n");
-			}*/
+			pos_ctl.push_back(ctl1);
+			pos_ctl.push_back(ctl2);
+			pos_ctl.push_back(new_end);
 			anim_done = false;
 		}
 		
@@ -285,7 +277,7 @@ void* avatar_thread_update(void* key_input)
 		anim_done = (anim_t > .999999999f);
 		
 		if(!anim_done){
-			vector<float> next_pos = cubic_bezier(anim_t, pos_ctl[0], pos_ctl[1], pos_ctl[2], pos_ctl[3]); //pos_ctl[pos_ctl.size() - 4], pos_ctl[pos_ctl.size() - 3], pos_ctl[pos_ctl.size() - 2], pos_ctl[pos_ctl.size() - 1]);
+			vector<float> next_pos = cubic_bezier(anim_t, pos_ctl[0], pos_ctl[1], pos_ctl[2], pos_ctl[3]);
 
 			printf("%f - %f\n", anim_t, next_pos[0]);
 
