@@ -23,7 +23,7 @@ pthread_cond_t avatar_update_cond=PTHREAD_COND_INITIALIZER;
 
 const int thread_num=1;
 float axis[thread_num][3]={0,1.0f,0};
-float translate[thread_num][3]={1.0f,0,0};
+float translate[thread_num][3]={0.0f,0,0};
 float color[thread_num][3]={1.0f,0,0};
 float angle[thread_num]={0};
 float angular_velocity[thread_num]={0};
@@ -31,7 +31,19 @@ bool update_avatar=false;
 unsigned char avatar_key;
 
 const float braking_force = 10.0f;
+float anim_t = 0.0f;
+float heading[3] = {1.0f, 0.0f, 0.0f};
 float velocity[3] = {0.0f, 0.0f, 0.0f};
+float location[3] = {0.0f, 0.0f, 0.0f};
+vector<vector<float>> pos_ctl;
+
+vector<float> vec_add(int dim, bool sub, vector<float> a, vector<float> b){
+	vector<float> c(dim, 0);
+	for(int i = 0; i < dim; i++){
+		c[i] = a[i] + (sub? -1.0f * b[i] : b[i]);
+	}
+	return c;
+}
 
 vector<float> cubic_bezier(const float t,const vector<float>& point0,const vector<float>& point1,const vector<float>& point2,const vector<float>& point3)
 {
@@ -136,32 +148,76 @@ vector<float> slerp(const float t,const vector<float>& q1,const vector<float>& q
 	}
 	return result;
 }
+ 
 
 ////function called by avatar thread
 void* avatar_thread_update(void* key_input)
 {
+	bool anim_done = true;
 	while(true){
 		////wait until receiving the signal to update
 		pthread_mutex_lock(&mutex); 
+
+		// Set idle state for animation
+		if(anim_done){
+			pos_ctl[0] = pos_ctl[3];
+			pos_ctl[1] = pos_ctl[3];
+			pos_ctl[2] = pos_ctl[3];
+			anim_t = 0.0f;
+		}
+
 		while (!update_avatar){
 			pthread_cond_wait(&avatar_update_cond, &mutex); 
 		}
 
 		////update the motion of the corresponding avatar
-		if(avatar_key == 'w')//move forward
-			translate[0][0]+=0.1f;
-		if(avatar_key == 's')//move backward
-			translate[0][0]-=0.1f;
-		if(avatar_key == 'a')//move left
-			translate[0][2]-=0.1f;
-		if(avatar_key == 'd')//move right
-			translate[0][2]+=0.1f;
+		vector<float> next_dir(3,0);
+		if(avatar_key == 'w'){//move forward
+			//translate[0][0]+=0.1f;
+			next_dir[0] += 1.0f;
+		}
+		if(avatar_key == 's'){//move backward
+			//translate[0][0]-=0.1f;
+			next_dir[0] -= 1.0f;
+		}
+		if(avatar_key == 'a'){//move left
+			//translate[0][2]-=0.1f;
+			next_dir[2] -= 1.0f;
+		}
+		if(avatar_key == 'd'){//move right
+			//translate[0][2]+=0.1f;
+			next_dir[2] += 1.0f;
+		}
 		if(avatar_key == 'n')//turn left
 			angle[0]+=pi/2.0f;
 		if(avatar_key == 'm')//turn right
 			angle[0]-=pi/2.0f;
+		
+		// New command or command interrupting animation
+		if(avatar_key != '\0'){
+			if(anim_done == false){
+				pos_ctl[0][0] = translate[0][0];
+				pos_ctl[0][1] = translate[0][1];
+				pos_ctl[0][2] = translate[0][2];
+				pos_ctl[1] = pos_ctl[0];
+				pos_ctl[2] = pos_ctl[0];
+			}
+			anim_done = false;
+			anim_t = 0.0f;
+			pos_ctl[3] = vec_add(3, false, pos_ctl[1], next_dir);
+		}
+		
+		vector<float> next_pos = cubic_bezier(anim_t, pos_ctl[0], pos_ctl[1], pos_ctl[2], pos_ctl[3]);
+		if(avatar_key != '\0')
+			printf("Prev Pos: %f\t%f\t%f\n",  next_pos[0],  next_pos[1],  next_pos[2]);
+		for(int i = 0; i < 3; i++){
+			translate[0][i] = next_pos[i];
+		}
 
-		update_avatar=false;
+		update_avatar = false; 
+		anim_done = (anim_t > .999999999f);
+		anim_t += .01f;
+		avatar_key = '\0';
 		pthread_mutex_unlock(&mutex);
 	}
 	return 0;
@@ -179,7 +235,7 @@ void init_threads()
 	////create threads
 	pthread_t threads[thread_num];
 	////create threads, return 0 if the thread is correctly created
-	int rc=pthread_create(&threads[0],NULL,avatar_thread_update,(void*)avatar_key);   
+	int rc = pthread_create(&threads[0], NULL, avatar_thread_update, (void*)avatar_key);   
 	if(rc){std::cerr<<"cannot create thread "<<0<<std::endl;}
 }
 ////destroy threads
@@ -204,9 +260,13 @@ void init()
 	float ambient_color[]={0.5f,0.5f,0.5f,1.0f};
 	float light_pos[]={1.0f,1.0f,1.5f,0};
 	float light_color[]={1.0f,1.0f,1.0f,1.0f};
-	glLightfv(GL_LIGHT0,GL_POSITION,light_pos);
-	glLightfv(GL_LIGHT0,GL_DIFFUSE,light_color);
-	glLightModelfv(GL_LIGHT_MODEL_AMBIENT,ambient_color);
+	
+	for(int i = 0; i < 4; i++)
+		pos_ctl.push_back(vector<float>(3, 0));
+
+	glLightfv(GL_LIGHT0, GL_POSITION, light_pos);
+	glLightfv(GL_LIGHT0, GL_DIFFUSE, light_color);
+	glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient_color);
 	
 	glShadeModel(GL_SMOOTH);
 	glEnable(GL_LIGHTING);
@@ -261,6 +321,17 @@ void keyPressed(unsigned char key,int x,int y)
 	glutPostRedisplay();
 }
 
+
+void timer(int value)
+{
+	glutPostRedisplay();
+	pthread_mutex_lock(&mutex);
+	avatar_key = '\0'; // Prevent repeat keypresses
+	pthread_mutex_unlock(&mutex);
+	update();
+	glutTimerFunc(1000/60, timer, window_id);
+}
+
 int main(int argc,char* argv[])
 {
 	glutInit(&argc, argv);
@@ -272,6 +343,7 @@ int main(int argc,char* argv[])
 	glutDisplayFunc(display);
 	glutReshapeFunc(reshape);
 	glutKeyboardFunc(keyPressed);
+	glutTimerFunc(1000/60, timer, window_id);
 
 	//debugging code for testing quaternions and slerp
 	vector<float> q1(4, 0);
