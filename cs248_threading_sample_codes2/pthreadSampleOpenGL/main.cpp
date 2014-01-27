@@ -31,6 +31,8 @@ bool update_avatar=false;
 unsigned char avatar_key;
 
 const float braking_force = 10.0f;
+float anim_dist = .1f;
+float anim_speed = .2f;
 float anim_t = 0.0f;
 float heading[3] = {1.0f, 0.0f, 0.0f};
 float velocity[3] = {0.0f, 0.0f, 0.0f};
@@ -43,6 +45,37 @@ vector<float> vec_add(int dim, bool sub, vector<float> a, vector<float> b){
 		c[i] = a[i] + (sub? -1.0f * b[i] : b[i]);
 	}
 	return c;
+}
+
+float vec_dot_product(int dim, const vector<float> a, const vector<float> b){
+	float dot = 0.0f;
+	for(int i = 0; i < dim; i++){
+		dot += a[i] * b[i];
+	}
+	return dot;
+}
+
+vector<float> vec_scalar_product(int dim, float c, const vector<float> a){
+	vector<float> scaled(dim, 0);
+	for(int i = 0; i < dim; i++){
+		scaled[i] = c * a[i];
+	}
+	return scaled;
+}
+
+vector<float> vec_normalize(int dim, vector<float> a){
+	float mag = 0.0f;
+	for(int i = 0; i < dim; i++){
+		mag += a[i] * a[i];
+	}
+	mag = sqrt(mag);
+	vector<float> normalized(dim, 0);
+	if(mag > 0.0f){
+		for(int i = 0; i < dim; i++){
+			normalized[i] = a[i] / mag;
+		}
+	}
+	return normalized;
 }
 
 vector<float> cubic_bezier(const float t,const vector<float>& point0,const vector<float>& point1,const vector<float>& point2,const vector<float>& point3)
@@ -107,6 +140,8 @@ vector<float> rotate_vector(const vector<float>& v,const vector<float>& q)
 	return result;
 }
 
+
+
 float quaternion_dot_product(const vector<float>& q1,const vector<float>& q2)
 {
 	return q1[0]*q2[0]+q1[1]*q2[1]+q1[2]*q2[2]+q1[3]*q2[3];
@@ -144,26 +179,36 @@ vector<float> slerp(const float t,const vector<float>& q1,const vector<float>& q
 	}
 	float alpha=acos(quaternion_dot_product(q1_copy,q2_copy));
 	for(int i=0;i<4;i++){
-			result[i]=sin((1.0f-t)*alpha)/sin(alpha)*q1_copy[i]+sin(t*alpha)/sin(alpha)*q2_copy[i];
+		result[i]=sin((1.0f-t)*alpha)/sin(alpha)*q1_copy[i]+sin(t*alpha)/sin(alpha)*q2_copy[i];
 	}
 	return result;
 }
- 
+
 
 ////function called by avatar thread
 void* avatar_thread_update(void* key_input)
 {
 	bool anim_done = true;
 	while(true){
-		////wait until receiving the signal to update
+		//wait until receiving the signal to update
 		pthread_mutex_lock(&mutex); 
 
-		// Set idle state for animation
+		// Setup position control curve at the end/beginning of an animation
 		if(anim_done){
-			pos_ctl[0] = pos_ctl[3];
-			pos_ctl[1] = pos_ctl[3];
-			pos_ctl[2] = pos_ctl[3];
-			anim_t = 0.0f;
+			if(pos_ctl.size() > 4){
+				// We have queued actions, update ctl vector by popping
+				pos_ctl.erase(pos_ctl.begin()); // Remove start point
+				pos_ctl.erase(pos_ctl.begin()); // Remove starting deriv
+				pos_ctl.erase(pos_ctl.begin()); // Remove old ending deriv
+				anim_t = 0.0f;
+				printf("----------------\n");
+			}else{
+				// We're actually done. Update everything to the end position
+				/*pos_ctl[0] = pos_ctl[3];
+				pos_ctl[1] = pos_ctl[3];*/
+				pos_ctl[2] = pos_ctl[3];
+			}
+			//anim_t = 0.0f;
 		}
 
 		while (!update_avatar){
@@ -174,49 +219,82 @@ void* avatar_thread_update(void* key_input)
 		vector<float> next_dir(3,0);
 		if(avatar_key == 'w'){//move forward
 			//translate[0][0]+=0.1f;
-			next_dir[0] += 1.0f;
+			next_dir[0] += anim_dist;
 		}
 		if(avatar_key == 's'){//move backward
 			//translate[0][0]-=0.1f;
-			next_dir[0] -= 1.0f;
+			next_dir[0] -= anim_dist;
 		}
 		if(avatar_key == 'a'){//move left
 			//translate[0][2]-=0.1f;
-			next_dir[2] -= 1.0f;
+			next_dir[2] -= anim_dist;
 		}
 		if(avatar_key == 'd'){//move right
 			//translate[0][2]+=0.1f;
-			next_dir[2] += 1.0f;
+			next_dir[2] += anim_dist;
 		}
 		if(avatar_key == 'n')//turn left
 			angle[0]+=pi/2.0f;
 		if(avatar_key == 'm')//turn right
 			angle[0]-=pi/2.0f;
-		
+
 		// New command or command interrupting animation
 		if(avatar_key != '\0'){
-			if(anim_done == false){
-				pos_ctl[0][0] = translate[0][0];
-				pos_ctl[0][1] = translate[0][1];
-				pos_ctl[0][2] = translate[0][2];
-				pos_ctl[1] = pos_ctl[0];
-				pos_ctl[2] = pos_ctl[0];
-			}
+			//if(anim_done == false){
+				vector<float> scnd_end = pos_ctl[pos_ctl.size() - 2];
+				vector<float> end = pos_ctl.back();
+
+				// Calculate default C1 & C2
+				vector<float> new_end = vec_add(3, false, end, next_dir);
+
+				float dx = abs(end[0] - new_end[0]);
+				float dy = abs(end[1] - new_end[1]);
+				float dz = abs(end[2] - new_end[2]);
+
+				vector<float> ctl1(end), ctl2(new_end);
+				if(dx > dy && dx > dz){
+					// dX is greatest
+					ctl1[0] = (end[0] + new_end[0]) / 2.0f;
+					ctl2[0] = ctl1[0];
+				} else if( dy > dz){
+					// dY is greatest
+					ctl1[1] = (end[1] + new_end[1]) / 2.0f;
+					ctl2[1] = ctl1[1];
+				} else{
+					// dZ is greatest
+					ctl1[2] = (end[2] + new_end[2]) / 2.0f;
+					ctl2[2] = ctl1[2];
+				}
+
+				// Calculate derivatives for C1 continuity
+				vector<float> end_deriv = vec_normalize(3, vec_add(3, true, end, scnd_end));
+				ctl1 = vec_add(3, false, end, vec_scalar_product(3, vec_dot_product(3, vec_add(3, true, ctl1, end), end_deriv), end_deriv));
+
+				pos_ctl.push_back(ctl1);
+				pos_ctl.push_back(ctl2);
+				pos_ctl.push_back(new_end);
+			//}else{
+			/*if(anim_done){
+				anim_t = 0.0f;
+				printf("================\n");
+			}*/
 			anim_done = false;
-			anim_t = 0.0f;
-			pos_ctl[3] = vec_add(3, false, pos_ctl[1], next_dir);
 		}
 		
-		vector<float> next_pos = cubic_bezier(anim_t, pos_ctl[0], pos_ctl[1], pos_ctl[2], pos_ctl[3]);
-		if(avatar_key != '\0')
-			printf("Prev Pos: %f\t%f\t%f\n",  next_pos[0],  next_pos[1],  next_pos[2]);
-		for(int i = 0; i < 3; i++){
-			translate[0][i] = next_pos[i];
-		}
-
 		update_avatar = false; 
 		anim_done = (anim_t > .999999999f);
-		anim_t += .01f;
+		
+		if(!anim_done){
+			vector<float> next_pos = cubic_bezier(anim_t, pos_ctl[0], pos_ctl[1], pos_ctl[2], pos_ctl[3]); //pos_ctl[pos_ctl.size() - 4], pos_ctl[pos_ctl.size() - 3], pos_ctl[pos_ctl.size() - 2], pos_ctl[pos_ctl.size() - 1]);
+
+			printf("%f - %f\n", anim_t, next_pos[0]);
+
+			for(int i = 0; i < 3; i++){
+				translate[0][i] = next_pos[i];
+			}
+
+			anim_t += anim_speed;
+		}
 		avatar_key = '\0';
 		pthread_mutex_unlock(&mutex);
 	}
@@ -225,10 +303,10 @@ void* avatar_thread_update(void* key_input)
 ////initialize threads
 void init_threads()
 {
-    ////initialize mutex
+	////initialize mutex
 	pthread_mutex_init(&mutex,0);
 
-    ////initialize data
+	////initialize data
 	angle[0]=0;angle[1]=90.0f;
 	angular_velocity[0]=180.0f;angular_velocity[1]=270.0f;
 
@@ -241,7 +319,7 @@ void init_threads()
 ////destroy threads
 void destroy_threads()
 {
-    pthread_mutex_destroy(&mutex);
+	pthread_mutex_destroy(&mutex);
 	pthread_cond_destroy(&avatar_update_cond);
 }
 ////signal the avatar thread
@@ -260,14 +338,14 @@ void init()
 	float ambient_color[]={0.5f,0.5f,0.5f,1.0f};
 	float light_pos[]={1.0f,1.0f,1.5f,0};
 	float light_color[]={1.0f,1.0f,1.0f,1.0f};
-	
+
 	for(int i = 0; i < 4; i++)
 		pos_ctl.push_back(vector<float>(3, 0));
 
 	glLightfv(GL_LIGHT0, GL_POSITION, light_pos);
 	glLightfv(GL_LIGHT0, GL_DIFFUSE, light_color);
 	glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient_color);
-	
+
 	glShadeModel(GL_SMOOTH);
 	glEnable(GL_LIGHTING);
 	glEnable(GL_LIGHT0);
@@ -286,7 +364,7 @@ void display()
 	glLoadIdentity();
 	gluLookAt(-1.0f,3.0f,0,1.0f,0,0,0,1.0f,0);
 
-    ////draw a cube controlled by the avatar thread
+	////draw a cube controlled by the avatar thread
 	glPushMatrix();
 	glTranslatef(translate[0][0],translate[0][1],translate[0][2]);
 	glRotatef(angle[0],axis[0][0],axis[0][1],axis[0][2]);
@@ -307,7 +385,7 @@ void reshape(int w,int h)
 	glViewport(0,0,(GLsizei)window_width,(GLsizei)window_height);
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-    gluPerspective(45.0,(GLdouble)window_width/(GLdouble)window_height,0.1,1000.0);
+	gluPerspective(45.0,(GLdouble)window_width/(GLdouble)window_height,0.1,1000.0);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 }
@@ -317,6 +395,20 @@ void keyPressed(unsigned char key,int x,int y)
 	pthread_mutex_lock(&mutex);
 	avatar_key=key;
 	pthread_mutex_unlock(&mutex);
+	
+	if(key == '+'){
+		anim_dist += .1f;
+		return;
+	}else if(key == '-'){
+		anim_dist -= .1f;
+		return;
+	}else if(key == '*'){
+		anim_speed *= 2.0f;
+		return;
+	}else if(key == '/'){
+		anim_speed /= 2.0f;
+		return;
+	}
 	update();
 	glutPostRedisplay();
 }
@@ -367,6 +459,6 @@ int main(int argc,char* argv[])
 	init_threads();
 	glutMainLoop();
 
-    destroy_threads();
+	destroy_threads();
 	return 0;
 }
